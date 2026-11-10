@@ -6,7 +6,7 @@
 FROM node:20-alpine AS dependencies
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production
+RUN if [ -f package-lock.json ]; then npm ci --only=production; else npm install --omit=dev; fi
 
 # Stage 2: Hardened, Unprivileged Runtime Container
 FROM alpine:3.20 AS runner
