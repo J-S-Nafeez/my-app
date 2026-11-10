@@ -1,0 +1,100 @@
+name: DevSecOps CI - Scan and Push to ECR
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Least privilege token permissions
+permissions:
+  id-token: write      # Required for requesting AWS STS OIDC token
+  contents: read       # Required to checkout repository
+  security-events: write # Required for Trivy SARIF reporting in Security tab
+
+env:
+  AWS_REGION: ap-south-1 # Set to your AWS Region (Mumbai)
+  ECR_REPOSITORY: my-app # Matches your ECR repo name
+  IAM_ROLE_ARN: ${{ secrets.AWS_IAM_ROLE_ARN }} # Stored in GitHub Repo Secrets
+
+jobs:
+  devsecops-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout Git code
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Step 2: Secret Scanning (Shift-Left)
+      - name: Run Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 3: Run Unit Tests
+      - name: Setup Node.js & Run Tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: |
+          npm ci
+          npm test
+
+      # Step 4: Setup Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Step 5: Build Image Locally for Security Scanning
+      - name: Build Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: ${{ env.ECR_REPOSITORY }}:scan-target
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Step 6: Vulnerability Scan using Trivy
+      - name: Scan Image for Vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.ECR_REPOSITORY }}:scan-target'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1' # Build breaks if CRITICAL/HIGH vulnerabilities found
+          ignore-unfixed: true
+
+      - name: Upload Trivy Results to Security Tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # Step 7: Assume AWS IAM Role via OIDC (Only on Push to Main)
+      - name: Authenticate to AWS via OIDC
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.IAM_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Step 8: Log in to Amazon ECR
+      - name: Login to Amazon ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Step 9: Tag and Push to ECR (Enforces Git SHA immutability)
+      - name: Push Container to Amazon ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker tag ${{ env.ECR_REPOSITORY }}:scan-target $REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+          docker push $REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG
+          echo "Successfully pushed $REGISTRY/${{ env.ECR_REPOSITORY }}:$IMAGE_TAG to ECR"

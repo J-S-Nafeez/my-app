@@ -1,0 +1,14 @@
+{
+  "name": "aws-ecr-devsecops-app",
+  "version": "1.0.0",
+  "description": "Production-ready microservice with DevSecOps CI/CD to AWS ECR",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "helmet": "^7.1.0"
+  }
+}
