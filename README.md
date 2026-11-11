@@ -39,6 +39,7 @@ git commit -m "feat: setup DevSecOps pipeline with security scans and ECR push"
 git branch -M main
 git remote add origin https://github.com/<YOUR_GITHUB_USERNAME>/<YOUR_REPO_NAME>.git
 git push -u origin main
+
 ```
 
 ### 3. Verify in GitHub and AWS
